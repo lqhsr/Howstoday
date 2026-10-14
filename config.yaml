@@ -1,6 +1,6 @@
 # 每日记录
-# 8081 千问 2.5-VL：看截图，写成文字
-# 8080 千问 3.6：把一小时的文字收成一两句，日报只读这些小时摘要
+# vision：读截图；llm：小时摘要与「当天完成任务」报告
+# 默认连接本机 OpenAI 兼容服务；改成远程 URL + api_key 即可切换（见 README）
 
 # 截屏间隔（分钟）
 screenshot_interval: 5
@@ -8,16 +8,26 @@ screenshot_interval: 5
 vision:
   model: "Qwen2.5-VL-7B"
   base_url: "http://127.0.0.1:8081/v1"
-  api_key: ""
+  # 远程示例：base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  #           model: "qwen-vl-plus"
+  api_key: ""                 # 也可直接填 key；空则读环境变量 / 本地 api.key
+  api_key_env: "VISION_API_KEY"
   timeout: 120
+  # use_proxy: null           # null=本地关代理、远程开；true/false 强制
+  # extra_body: null          # null=本地自动带 llama 参数；远程默认不传
 
 llm:
   model: "Qwen3.6-35B-A3B"
   base_url: "http://127.0.0.1:8080/v1"
+  # 远程示例：base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  #           model: "qwen-plus"
   api_key: ""
+  api_key_env: "LLM_API_KEY"
   timeout: 120
   temperature: 0.3
-  enable_thinking: false
+  enable_thinking: false      # 仅本地 llama 默认 extra_body 会用到
+  # use_proxy: null
+  # extra_body: null
 
 data:
   base_dir: "./data"

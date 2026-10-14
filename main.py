@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-daily-summary - 双模型架构：
-  1. Qwen2.5-VL-7B  读截图 → 文字描述
-  2. Qwen3.6-35B-A3B 按小时把读图结果收成一两句话，日报只读取这些小时摘要
+daily-summary - 双模型架构（OpenAI 兼容，支持本地与远程）：
+  1. 视觉模型  读截图 → 文字描述
+  2. 文本模型  按小时收成一两句话，再生成当天完成任务报告
 """
 
 import argparse
@@ -35,24 +35,86 @@ log = logging.getLogger("daily-summary")
 
 # ─── 工具函数 ───────────────────────────────────────────────────
 
-def get_api_key() -> str:
-    """从 LLM/config/api.key 读取"""
-    key_path = Path("/home/lqhsr/文档/LLM/config/api.key")
-    if key_path.exists():
-        return key_path.read_text().strip()
-    return os.environ.get("LLM_API_KEY", "EMPTY")
+LOCAL_API_KEY_FILE = Path("/home/lqhsr/文档/LLM/config/api.key")
 
-def make_openai_client(base_url: str, timeout: float):
-    """本地模型直连，忽略系统 SOCKS/HTTP 代理（避免 socks:// 报错）。"""
+
+def is_local_endpoint(base_url: str) -> bool:
+    """判断是否为本机 OpenAI 兼容端点（127.0.0.1 / localhost）。"""
+    from urllib.parse import urlparse
+
+    host = (urlparse(base_url).hostname or "").lower()
+    return host in {"127.0.0.1", "localhost", "::1"} or host.startswith("127.")
+
+
+def resolve_api_key(section: dict, *, default_env: str) -> str:
+    """解析 API Key，兼容本地与远程。
+
+    优先级：
+      1. 配置里的 api_key（非空）
+      2. 配置 api_key_env 或默认环境变量
+      3. LLM_API_KEY / OPENAI_API_KEY
+      4. 本地 api.key 文件（旧行为）
+      5. EMPTY（本地 llama-server 可无 key）
+    """
+    key = str(section.get("api_key") or "").strip()
+    if key:
+        return key
+
+    env_name = str(section.get("api_key_env") or default_env or "").strip()
+    for name in (env_name, "LLM_API_KEY", "OPENAI_API_KEY"):
+        if name and os.environ.get(name, "").strip():
+            return os.environ[name].strip()
+
+    if LOCAL_API_KEY_FILE.exists():
+        file_key = LOCAL_API_KEY_FILE.read_text(encoding="utf-8").strip()
+        if file_key:
+            return file_key
+    return "EMPTY"
+
+
+def should_use_proxy(section: dict) -> bool:
+    """本地默认直连（避开 socks:// 报错）；远程默认跟随系统代理。可用 use_proxy 覆盖。"""
+    if "use_proxy" in section and section["use_proxy"] is not None:
+        return bool(section["use_proxy"])
+    return not is_local_endpoint(section["base_url"])
+
+
+def make_openai_client(section: dict, *, default_env: str):
+    """创建 OpenAI 兼容客户端，本地/远程自动切换代理策略。"""
     import httpx2
     from openai import OpenAI
 
+    base_url = section["base_url"]
+    timeout = section.get("timeout", 120)
+    use_proxy = should_use_proxy(section)
+    api_key = resolve_api_key(section, default_env=default_env)
+
+    log.debug(
+        "API client %s proxy=%s key=%s",
+        base_url,
+        use_proxy,
+        "set" if api_key and api_key != "EMPTY" else "empty",
+    )
     return OpenAI(
         base_url=base_url,
-        api_key=get_api_key() or "EMPTY",
+        api_key=api_key,
         timeout=timeout,
-        http_client=httpx2.Client(trust_env=False, timeout=timeout),
+        http_client=httpx2.Client(trust_env=use_proxy, timeout=timeout),
     )
+
+
+def completion_extra_body(section: dict, *, local_defaults: dict) -> dict | None:
+    """本地 llama-server 默认带 extra_body；远程默认不传，避免不兼容字段。
+
+    配置里写 extra_body: {} 或不兼容时设为 null，可显式关闭；
+    写自定义 dict 则原样传给远端。
+    """
+    if "extra_body" in section:
+        extra = section.get("extra_body")
+        return extra if isinstance(extra, dict) and extra else None
+    if is_local_endpoint(section["base_url"]):
+        return local_defaults
+    return None
 
 def get_data_dir(cfg: dict) -> Path:
     return Path(cfg["data"]["base_dir"])
@@ -90,11 +152,12 @@ def image_time(path: Path) -> datetime:
 # ─── 1. 视觉模型：截图读图 → 文字描述 ─────────────────────────
 
 def describe_screenshot(cfg: dict, screenshot_path: Path) -> str:
-    """用 Qwen2.5-VL 读取截图，返回文字描述"""
-    client = make_openai_client(cfg["vision"]["base_url"], cfg["vision"]["timeout"])
+    """调用视觉模型读取截图，返回文字描述（本地或远程 OpenAI 兼容接口）。"""
+    vision = cfg["vision"]
+    client = make_openai_client(vision, default_env="VISION_API_KEY")
 
     # 截屏描述提示词：引导模型输出结构化文本
-    prompt = f"""请详细描述这张桌面截图，按以下格式输出：
+    prompt = """请详细描述这张桌面截图，按以下格式输出：
 
 ## 当前状态
 - 主窗口/应用：[应用名称]
@@ -114,49 +177,72 @@ def describe_screenshot(cfg: dict, screenshot_path: Path) -> str:
 请直接输出，不要多余解释。不要推断或填写时间。
 """
 
-    log.info("👁️  Qwen2.5-VL 读图中...")
-    try:
-        resp = client.chat.completions.create(
-            model=cfg["vision"]["model"],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{encode_image(screenshot_path)}"
-                            }
+    model = vision["model"]
+    where = "本地" if is_local_endpoint(vision["base_url"]) else "远程"
+    log.info("👁️  [%s] %s 读图中...", where, model)
+    create_kwargs = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{encode_image(screenshot_path)}"
                         },
-                        {"type": "text", "text": prompt},
-                    ],
-                }
-            ],
-            max_tokens=2048,
-            temperature=0.3,
-            extra_body={"top_k": 20, "chat_template_kwargs": {"enable_thinking": False}},
-        )
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+        "max_tokens": 2048,
+        "temperature": 0.3,
+    }
+    extra = completion_extra_body(
+        vision,
+        local_defaults={
+            "top_k": 20,
+            "chat_template_kwargs": {"enable_thinking": False},
+        },
+    )
+    if extra:
+        create_kwargs["extra_body"] = extra
+
+    try:
+        resp = client.chat.completions.create(**create_kwargs)
     except Exception as e:
         log.error("❌ 视觉模型调用失败: %s", e)
         return ""
 
-    return resp.choices[0].message.content.strip()
+    content = resp.choices[0].message.content or ""
+    return content.strip()
 
-# ─── 2. 千问 3.6：小时摘要与日报 ──────────────────────────────
+# ─── 2. 文本模型：小时摘要与日报 ──────────────────────────────
 
 def ask_llm(cfg: dict, prompt: str, max_tokens: int = 1024) -> str:
-    """调用千问 3.6，返回纯文本。"""
-    client = make_openai_client(cfg["llm"]["base_url"], cfg["llm"]["timeout"])
-    resp = client.chat.completions.create(
-        model=cfg["llm"]["model"],
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-        temperature=cfg["llm"]["temperature"],
-        extra_body={
+    """调用文本模型，返回纯文本（本地或远程 OpenAI 兼容接口）。"""
+    llm = cfg["llm"]
+    client = make_openai_client(llm, default_env="LLM_API_KEY")
+    create_kwargs = {
+        "model": llm["model"],
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": llm.get("temperature", 0.3),
+    }
+    extra = completion_extra_body(
+        llm,
+        local_defaults={
             "top_k": 20,
-            "chat_template_kwargs": {"enable_thinking": cfg["llm"].get("enable_thinking", False)},
+            "chat_template_kwargs": {
+                "enable_thinking": llm.get("enable_thinking", False),
+            },
         },
     )
+    if extra:
+        create_kwargs["extra_body"] = extra
+
+    resp = client.chat.completions.create(**create_kwargs)
     text = (resp.choices[0].message.content or "").strip()
     if "</think>" in text:
         text = text.split("</think>", 1)[-1].strip()

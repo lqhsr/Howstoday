@@ -1,0 +1,42 @@
+# 复制为 config.yaml 后按需修改。
+# 本地与远程都走 OpenAI 兼容接口（/v1/chat/completions）。
+
+screenshot_interval: 5
+
+# ── 方案 A：本机模型（默认）────────────────────────────────
+vision:
+  model: "Qwen2.5-VL-7B"
+  base_url: "http://127.0.0.1:8081/v1"
+  api_key: ""
+  api_key_env: "VISION_API_KEY"
+  timeout: 120
+
+llm:
+  model: "Qwen3.6-35B-A3B"
+  base_url: "http://127.0.0.1:8080/v1"
+  api_key: ""
+  api_key_env: "LLM_API_KEY"
+  timeout: 120
+  temperature: 0.3
+  enable_thinking: false
+
+# ── 方案 B：远程（通义千问 OpenAI 兼容，示例）────────────────
+# vision:
+#   model: "qwen-vl-plus"
+#   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+#   api_key: ""                    # 或 export VISION_API_KEY=sk-...
+#   api_key_env: "VISION_API_KEY"
+#   timeout: 120
+#   # use_proxy: true              # 默认远程会走系统代理
+#
+# llm:
+#   model: "qwen-plus"
+#   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+#   api_key: ""
+#   api_key_env: "LLM_API_KEY"
+#   timeout: 120
+#   temperature: 0.3
+
+data:
+  base_dir: "./data"
+  screenshot_dir: "./data/screenshots"
