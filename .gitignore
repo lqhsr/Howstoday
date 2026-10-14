@@ -1,0 +1,26 @@
+# 数据文件（不提交到 git）
+data/
+output/
+
+# 本地虚拟环境与密钥
+.venv/
+.env
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

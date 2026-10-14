@@ -1,0 +1,24 @@
+# 每日记录
+# 8081 千问 2.5-VL：看截图，写成文字
+# 8080 千问 3.6：把一小时的文字收成一两句，日报只读这些小时摘要
+
+# 截屏间隔（分钟）
+screenshot_interval: 5
+
+vision:
+  model: "Qwen2.5-VL-7B"
+  base_url: "http://127.0.0.1:8081/v1"
+  api_key: ""
+  timeout: 120
+
+llm:
+  model: "Qwen3.6-35B-A3B"
+  base_url: "http://127.0.0.1:8080/v1"
+  api_key: ""
+  timeout: 120
+  temperature: 0.3
+  enable_thinking: false
+
+data:
+  base_dir: "./data"
+  screenshot_dir: "./data/screenshots"
